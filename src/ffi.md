@@ -232,6 +232,43 @@ mod tests {
 }
 ```
 
+### Adding extra safety guarantee for non thread-safe FFI calls
+
+Sometimes, some FFI functions use `static` varaibles and thus cannot be called concurrencely.
+For such functions, we could modify the wrapper with some extra ZST variables.
+
+For example, suppose the `write` function is a FFI call that is not thread-safe,
+and `read` function yields `*const i32` which could be modified by `write`.
+Their signature is shown as follows:
+```rust
+struct Opaque([u8;0]); // Opaque pointer form FFI.
+type OP=*mut Opaque;
+extern "C" {
+    fn write(a:i32);
+    fn read()->OP;
+    fn value(op:OP)->i32;
+}
+```
+To ensure the write call does not modify any readed OP, we could define a ZST called `BorrowChecker`,
+and give all Opaque pointer a lifetime marker:
+```rust
+# struct Opaque([u8;0]); // Opaque pointer form FFI.
+# type OP=*mut Opaque;
+# extern "C" {
+#     fn write(a:i32);
+#     fn read()->OP;
+#     fn value(op:OP)->i32;
+# }
+struct WrappingOP<'a>(OP, core::marker::PhantomData<'a>);
+pub struct BorrowChecker{_f:[0;u8]}; // using a private field to ensure the checker cannot be constructed safely
+impl BorrowChecker {
+    unsafe fn new()->Self{BorrowChecker{_f:[]}}
+    fn write(&mut self, a:i32){unsafe{write(a)}}
+    fn read(&'a self)->WrappingOP<'a>{WrappingOP(unsafe{read()}, Default::default())}
+}
+```
+
+
 ## Destructors
 
 Foreign libraries often hand off ownership of resources to the calling code.
